@@ -2,61 +2,68 @@ pipeline {
     agent any
 
     environment {
-        // Define environment variables
-        VIRTUAL_ENV = 'venv'
-        PIP_CACHE_DIR = '.pip_cache'
+        REGISTRY = 'aws_account_id.dkr.ecr.region.amazonaws.com'
+        FLASK_IMAGE = "${REGISTRY}/flask-app"
+        DB_IMAGE = "${REGISTRY}/mysql-db"
+        HELM_CHART_PATH = 'helm'
+        KUBECONFIG = credentials('kubeconfig') // Jenkins credential ID for kubeconfig
+        ECR_CREDENTIALS = credentials('ecr-credentials') // Jenkins credential ID for ECR
     }
 
     stages {
-        stage('Setup') {
+        stage('Checkout Code') {
             steps {
-                echo 'Setting up virtual environment...'
-                // Create a virtual environment
-                sh 'python3 -m venv ${VIRTUAL_ENV}'
-                // Activate the virtual environment
-                sh '. ${VIRTUAL_ENV}/bin/activate'
-                // Upgrade pip
-                sh 'pip install --upgrade pip'
+                // Checkout code from GitHub
+                git 'https://github.com/your-repo/flask-app.git'
             }
         }
 
-        stage('Install Dependencies') {
+        stage('Build Docker Images') {
             steps {
-                echo 'Installing dependencies...'
-                // Install dependencies from requirements.txt
-                sh '. ${VIRTUAL_ENV}/bin/activate && pip install -r requirements.txt'
+                script {
+                    // Build Flask app Docker image
+                    docker.build("${FLASK_IMAGE}:${env.BUILD_ID}", "-f Dockerfile.flask .")
+                    
+                    // Build MySQL Docker image (if you have custom configuration)
+                    docker.build("${DB_IMAGE}:${env.BUILD_ID}", "-f Dockerfile.mysql .")
+                }
             }
         }
 
-        stage('Run Tests') {
+        stage('Push Docker Images') {
             steps {
-                echo 'Running tests...'
-                // Run your test suite
-                sh '. ${VIRTUAL_ENV}/bin/activate && pytest'
+                script {
+                    // Login to AWS ECR
+                    withCredentials([usernamePassword(credentialsId: "${ECR_CREDENTIALS}", usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY')]) {
+                        sh 'aws ecr get-login-password --region region | docker login --username AWS --password-stdin ${REGISTRY}'
+                        
+                        // Push Flask app Docker image
+                        sh "docker push ${FLASK_IMAGE}:${env.BUILD_ID}"
+                        
+                        // Push MySQL Docker image
+                        sh "docker push ${DB_IMAGE}:${env.BUILD_ID}"
+                    }
+                }
             }
         }
 
-        stage('Deploy') {
+        stage('Deploy to Kubernetes') {
             steps {
-                echo 'Deploying the application...'
-                // Deploy the Flask app
-                // This could involve copying files to a server, running a script, or restarting services
-                // Example: using SSH to deploy to a remote server
-                // sh 'scp -r * user@server:/path/to/deployment'
-                // sh 'ssh user@server "systemctl restart flask-app"'
-                // Or using Docker for containerized deployment
-                // sh 'docker build -t my-flask-app .'
-                // sh 'docker run -d -p 5000:5000 my-flask-app'
+                script {
+                    // Deploy Flask app and MySQL to Kubernetes using Helm
+                    withKubeConfig(credentialsId: 'kubeconfig') {
+                        sh 'helm upgrade --install flask-app ${HELM_CHART_PATH}/flask-app --set image.repository=${FLASK_IMAGE} --set image.tag=${env.BUILD_ID}'
+                        sh 'helm upgrade --install mysql-db ${HELM_CHART_PATH}/mysql-db --set image.repository=${DB_IMAGE} --set image.tag=${env.BUILD_ID}'
+                    }
+                }
             }
         }
     }
 
     post {
-        success {
-            echo 'Pipeline completed successfully!'
-        }
-        failure {
-            echo 'Pipeline failed!'
+        always {
+            // Clean up resources, if necessary
+            cleanWs()
         }
     }
 }
