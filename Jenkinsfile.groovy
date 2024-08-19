@@ -6,7 +6,7 @@ pipeline {
             steps {
                 git branch: 'main',
                     credentialsId: '0fb76644-59be-470a-a3dc-b73810d0c458',
-                    url: 'https://github.com/moustafa-ismail/sprints-project'
+                    url: 'https://github.com/MeranFarahat/sprints-proj'
                 sh 'cd Sprints_W5-_Final'
                 sh 'ls -altr'
             }
